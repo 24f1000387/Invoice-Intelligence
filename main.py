@@ -33,7 +33,7 @@ async def extract_invoice(request: Request):
     """
 
     response = client.chat.completions.create(
-        model="llama-3.1-70b-versatile",
+        model="llama-3.3-70b-versatile",
         messages=[{"role": "system", "content": "You are a finance extraction assistant. Return only valid JSON."},
                   {"role": "user", "content": prompt}],
         response_format={"type": "json_object"}
