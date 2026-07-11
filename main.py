@@ -13,18 +13,19 @@ async def extract_invoice(request: Request):
     schema = payload.get("schema")
 
     prompt = f"""
-    Extract the information from the invoice text below.
+    Analyze the following invoice text. 
     You must return a JSON object that strictly follows this JSON schema: {json.dumps(schema)}.
 
-    INSTRUCTIONS:
+    CRITICAL RULES:
     - vendor: Exact proper name.
-    - currency: ISO 4217 code (USD, EUR, GBP, INR, JPY).
-    - total_amount: Integer (remove symbols/separators/suffixes).
+    - currency: ISO 4217 code.
+    - total_amount: Integer.
     - invoice_date: YYYY-MM-DD.
-    - due_in_days: Integer (e.g., 'Net 30' -> 30).
+    - due_in_days: Integer.
     - is_paid: Boolean.
-    - priority: low, normal, high, urgent.
-    - contact_email: Lowercased.
+    - priority: low, normal, high, or urgent.
+    - contact_email: Lowercased, EXTRACT VERBATIM. Do not correct spelling, 
+      do not abbreviate, do not assume common domain names. Copy the characters exactly as they appear in the text.
     - line_items: Array of objects with sku, quantity, unit_price (int).
     - item_count: DO NOT EXTRACT. I will calculate this myself.
 
