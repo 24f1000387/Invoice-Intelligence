@@ -13,23 +13,23 @@ async def extract_invoice(request: Request):
     schema = payload.get("schema")
 
     prompt = f"""
-    Analyze the following invoice text. 
-    You must return a JSON object that strictly follows this JSON schema: {json.dumps(schema)}.
+    You are an automated data entry clerk. Your task is to extract information exactly as written in the invoice.
+    
+    JSON Schema to follow: {json.dumps(schema)}
 
-    CRITICAL RULES:
-    - vendor: Exact proper name.
-    - currency: ISO 4217 code.
-    - total_amount: Integer.
-    - invoice_date: YYYY-MM-DD.
-    - due_in_days: Integer.
-    - is_paid: Boolean.
-    - priority: low, normal, high, or urgent.
-    - contact_email: Lowercased, EXTRACT VERBATIM. Do not correct spelling, 
-      do not abbreviate, do not assume common domain names. Copy the characters exactly as they appear in the text.
-    - line_items: Array of objects with sku, quantity, unit_price (int).
-    - item_count: DO NOT EXTRACT. I will calculate this myself.
+    EXTRACTION RULES:
+    1. For 'contact_email', DO NOT USE your knowledge of words or common domains. 
+       Look at the text provided, find the email address, and copy it character-by-character. 
+       If the email is "john.khan@bluewaveanalyt.co", you MUST write "john.khan@bluewaveanalyt.co".
+       Do not add, remove, or change any characters.
+    2. 'total_amount': Extract as integer.
+    3. 'item_count': Leave blank or 0, I will calculate it.
+    4. Follow the provided schema strictly.
 
-    Text: {doc_text}
+    Text:
+    \"\"\"
+    {doc_text}
+    \"\"\"
     """
 
     response = client.chat.completions.create(
