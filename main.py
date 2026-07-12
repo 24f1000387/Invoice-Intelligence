@@ -1,7 +1,8 @@
 import os
+import re
 import json
-from fastapi import FastAPI, Request
-from groq import Groq
+from fastapi import FastAPI, Request, HTTPException
+from groq import Groq, RateLimitError
 
 app = FastAPI()
 
@@ -15,36 +16,34 @@ async def extract_invoice(request: Request):
     doc_text = payload.get("text", "")
     schema = payload.get("schema", {})
 
-    prompt = f"""
-You are an automated financial data extraction system.
+    # --------------------------------------------------
+    # Extract email directly from the invoice text
+    # (prevents LLM from changing characters)
+    # --------------------------------------------------
+    email_match = re.search(
+        r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+        doc_text,
+    )
+    extracted_email = (
+        email_match.group(0).strip().lower()
+        if email_match
+        else None
+    )
 
-Extract information ONLY from the provided invoice text.
+    prompt = f"""
+Extract invoice information from the text below.
 
 Return ONLY valid JSON matching this schema:
+
 {json.dumps(schema)}
 
-EXTRACTION RULES
+Rules:
 
-1. contact_email
-- Find the email address in the invoice.
-- DO NOT correct spelling.
-- DO NOT infer missing letters.
-- DO NOT complete domains.
-- Copy every character exactly as it appears.
-- Return the email in lowercase.
-
-2. total_amount
-- Return as an integer.
-- Do not include currency symbols or commas.
-
-3. item_count
-- Leave as 0.
-- It will be calculated automatically.
-
-4. line_items
-- Extract every line item present.
-
-5. If a value is missing, return null unless the schema specifies otherwise.
+- Do NOT invent values.
+- total_amount must be an integer.
+- item_count should be 0.
+- Extract every line item.
+- If a value is missing, return null.
 
 Invoice Text:
 \"\"\"
@@ -52,43 +51,55 @@ Invoice Text:
 \"\"\"
 """
 
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a precise financial data extraction assistant. "
-                    "Return ONLY valid JSON. "
-                    "Do not include markdown or explanations."
-                ),
-            },
-            {
-                "role": "user",
-                "content": prompt,
-            },
-        ],
-        response_format={"type": "json_object"},
-        temperature=0,
-    )
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a precise invoice extraction assistant. "
+                        "Return ONLY valid JSON."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
 
+    except RateLimitError:
+        raise HTTPException(
+            status_code=429,
+            detail="Groq rate limit exceeded. Try again later.",
+        )
+
+    # --------------------------------------------------
     # Parse JSON
-    data = json.loads(response.choices[0].message.content)
+    # --------------------------------------------------
+    try:
+        data = json.loads(response.choices[0].message.content)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=500,
+            detail="Model returned invalid JSON.",
+        )
 
-    # Some models wrap the output
+    # Some models wrap the response
     if isinstance(data, dict) and "invoice" in data:
         data = data["invoice"]
 
-    # Normalize email (required by evaluator)
-    if isinstance(data.get("contact_email"), str):
-        data["contact_email"] = (
-            data["contact_email"]
-            .strip()
-            .replace(" ", "")
-            .lower()
-        )
+    # --------------------------------------------------
+    # Override email with regex result
+    # --------------------------------------------------
+    data["contact_email"] = extracted_email
 
-    # Ensure total_amount is integer
+    # --------------------------------------------------
+    # Convert total_amount to integer
+    # --------------------------------------------------
     if "total_amount" in data:
         try:
             if isinstance(data["total_amount"], str):
@@ -100,19 +111,23 @@ Invoice Text:
                     .strip()
                 )
                 data["total_amount"] = int(float(value))
-            else:
+            elif data["total_amount"] is not None:
                 data["total_amount"] = int(data["total_amount"])
         except Exception:
             data["total_amount"] = None
 
-    # Calculate item_count from line_items
+    # --------------------------------------------------
+    # Compute item_count
+    # --------------------------------------------------
     if isinstance(data.get("line_items"), list):
         data["item_count"] = len(data["line_items"])
     else:
         data["line_items"] = []
         data["item_count"] = 0
 
-    # Return only expected keys
+    # --------------------------------------------------
+    # Return only required fields
+    # --------------------------------------------------
     required_keys = [
         "vendor",
         "currency",
@@ -126,6 +141,6 @@ Invoice Text:
         "item_count",
     ]
 
-    final_output = {key: data.get(key) for key in required_keys}
+    final_output = {k: data.get(k) for k in required_keys}
 
     return final_output
